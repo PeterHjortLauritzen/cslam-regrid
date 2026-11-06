@@ -1,9 +1,20 @@
 """Apply stage: remap CAM native (ncol) history files to lat-lon, writing
-output that mimics CAM's own interpolated lat-lon history files."""
+output that mimics CAM's own interpolated lat-lon history files.
+
+Vector fields (wind/stress pairs) are remapped as vectors: (u,v) components
+are rotated to Cartesian (vx,vy,vz) with the local east/north basis at the
+source cells, the three components are remapped as smooth scalars, and the
+result is projected onto the east/north basis of the destination cells.
+This avoids the large componentwise errors near the geographic poles, where
+the (u,v) basis rotates rapidly.  Pairs are auto-detected from metadata
+(name pattern U*<->V* or *X<->*Y, long_name zonal/meridional, matching
+dimensions) or given explicitly.
+"""
 from __future__ import annotations
 
 import datetime
 import os
+import re
 
 import numpy as np
 import netCDF4
@@ -21,7 +32,76 @@ _OUTPUTGRID = {"cap": "equally spaced with poles",
                "gauss": "Gauss"}
 
 # native coordinate variables replaced by the lat-lon coordinates
-_DROP_NCOL_VARS = {"lat", "lon", "area"}
+_DROP_NCOL_VARS = {"lat", "lon", "area", "areawt"}
+
+_ZONAL = re.compile(r"\bzonal\b", re.IGNORECASE)
+_MERIDIONAL = re.compile(r"\bmeridional\b", re.IGNORECASE)
+
+
+def _partner_names(name):
+    """Candidate meridional partners for a zonal component name."""
+    out = []
+    if name.startswith("U"):
+        out.append("V" + name[1:])
+    if name.endswith("X"):
+        out.append(name[:-1] + "Y")
+    return out
+
+
+def detect_vector_pairs(src_ds, names):
+    """Auto-detect (zonal, meridional) pairs among remappable variables.
+    A pair requires the name pattern (U*<->V* or *X<->*Y), identical
+    dimensions, AND matching long_names: either 'zonal'/'meridional'
+    (U/V, UBOT/VBOT, TAUX/TAUY, 'Zonal wind tendency ...') or long_names
+    identical up to a standalone U<->V word ('U total physics tendency').
+    Scalars like U10 ('10m wind speed') are never paired."""
+    pairs, used = [], set()
+    nameset = set(names)
+    for name in names:
+        if name in used:
+            continue
+        var = src_ds.variables[name]
+        ln = getattr(var, "long_name", "")
+        for pname in _partner_names(name):
+            if pname not in nameset or pname in used:
+                continue
+            pvar = src_ds.variables[pname]
+            if pvar.dimensions != var.dimensions:
+                continue
+            pln = getattr(pvar, "long_name", "")
+            ok = (_ZONAL.search(ln) and _MERIDIONAL.search(pln))
+            if not ok and ln and re.search(r"\bU\b", ln):
+                ok = re.sub(r"\bU\b", "V", ln) == pln
+            if ok:
+                pairs.append((name, pname))
+                used.update((name, pname))
+                break
+    return pairs
+
+
+def uv_to_cart(u, v, lam, phi):
+    """(u,v) in the local east/north basis -> Cartesian (vx,vy,vz).
+    lam, phi: radians, shape (ncol,); u, v: (ncol, nslice)."""
+    sl = np.sin(lam)[:, None]
+    cl = np.cos(lam)[:, None]
+    sp = np.sin(phi)[:, None]
+    cp = np.cos(phi)[:, None]
+    vx = -sl * u - sp * cl * v
+    vy = cl * u - sp * sl * v
+    vz = cp * v
+    return vx, vy, vz
+
+
+def cart_to_uv(vx, vy, vz, lam, phi):
+    """Project a Cartesian vector onto the local east/north basis (this
+    also discards any spurious radial component)."""
+    sl = np.sin(lam)[:, None]
+    cl = np.cos(lam)[:, None]
+    sp = np.sin(phi)[:, None]
+    cp = np.cos(phi)[:, None]
+    u = -sl * vx + cl * vy
+    v = -sp * cl * vx - sp * sl * vy + cp * vz
+    return u, v
 
 
 class RemapEngine:
@@ -43,7 +123,7 @@ class RemapEngine:
 
     def remap_file(self, infile, outfile, variables=None,
                    default_limiter="shape", limiter_overrides=None,
-                   verbose=True):
+                   vectors=None, auto_vectors=True, verbose=True):
         lim_over = limiter_overrides or {}
         w = self.w
         nlat, nlon = w["nlat"], w["nlon"]
@@ -67,7 +147,8 @@ class RemapEngine:
             out = netCDF4.Dataset(outfile, "w", format=fmt)
             try:
                 self._write(src_ds, out, col2pij, variables,
-                            default_limiter, lim_over, verbose)
+                            default_limiter, lim_over, vectors,
+                            auto_vectors, verbose)
             finally:
                 out.close()
         finally:
@@ -75,7 +156,7 @@ class RemapEngine:
 
     # ------------------------------------------------------------------
     def _write(self, src_ds, out, col2pij, variables, default_limiter,
-               lim_over, verbose):
+               lim_over, vectors, auto_vectors, verbose):
         w = self.w
         nlat, nlon = w["nlat"], w["nlon"]
 
@@ -149,8 +230,43 @@ class RemapEngine:
             print(f"  skipped (not on the physics grid or non-float): "
                   f"{' '.join(sorted(skipped))}")
 
-        # --- remapped variables
+        # --- vector pairs: explicit first, then auto-detected
+        pairs = []
+        paired = set()
+        for ua, va in (vectors or []):
+            if ua not in remap_vars or va not in remap_vars:
+                raise ValueError(f"vector pair {ua}:{va} not among the "
+                                 "remappable variables")
+            if src_ds.variables[ua].dimensions != \
+                    src_ds.variables[va].dimensions:
+                raise ValueError(f"vector pair {ua}:{va} dimension mismatch")
+            pairs.append((ua, va))
+            paired.update((ua, va))
+        if auto_vectors:
+            for ua, va in detect_vector_pairs(src_ds, remap_vars):
+                if ua not in paired and va not in paired:
+                    pairs.append((ua, va))
+                    paired.update((ua, va))
+        if pairs and verbose:
+            print("  vector pairs: "
+                  + " ".join(f"{a}:{b}" for a, b in pairs))
+
+        lam_a = np.deg2rad(np.asarray(src_ds.variables["lon"][:],
+                                      dtype=np.float64))
+        phi_a = np.deg2rad(np.asarray(src_ds.variables["lat"][:],
+                                      dtype=np.float64))
+        lam_b = np.tile(np.deg2rad(w["lon"]), nlat)
+        phi_b = np.repeat(np.deg2rad(w["lat"]), nlon)
+
+        for ua, va in pairs:
+            self._write_vector(src_ds, out, col2pij, ua, va, lim_over,
+                               lam_a, phi_a, lam_b, phi_b, nlat, nlon,
+                               verbose)
+
+        # --- remapped scalar variables
         for name in remap_vars:
+            if name in paired:
+                continue
             var = src_ds.variables[name]
             dims = var.dimensions[:-1] + ("lat", "lon")
             fill = getattr(var, "_FillValue", None)
@@ -179,3 +295,53 @@ class RemapEngine:
                 nv[:] = res.T.reshape(data.shape[:-1] + (nlat, nlon))
             if verbose:
                 print(f"  {name} ({mode_name})")
+
+    # ------------------------------------------------------------------
+    def _write_vector(self, src_ds, out, col2pij, ua, va, lim_over,
+                      lam_a, phi_a, lam_b, phi_b, nlat, nlon, verbose):
+        """Remap one (zonal, meridional) pair via Cartesian components."""
+        varu = src_ds.variables[ua]
+        varv = src_ds.variables[va]
+        dims = varu.dimensions[:-1] + ("lat", "lon")
+        # vectors default to unlimited: wind components are not bounded
+        # quantities and componentwise Cartesian bounds are frame-dependent
+        mode_name = lim_over.get(ua, lim_over.get(va, "none"))
+        mode = LIMITER_MODES[mode_name]
+
+        nvs = []
+        for var in (varu, varv):
+            fill = getattr(var, "_FillValue", None)
+            nv = out.createVariable(var.name, var.dtype, dims,
+                                    fill_value=fill)
+            nv.setncatts({a: var.getncattr(a) for a in var.ncattrs()
+                          if a != "_FillValue"})
+            nv.cslam_limiter = mode_name
+            nv.cslam_vector_pair = f"{ua}:{va}"
+            nvs.append(nv)
+
+        def do_slab(u, v):
+            shp = u.shape
+            uf = u.reshape(-1, self.src.ncol).T
+            vf = v.reshape(-1, self.src.ncol).T
+            nsl = uf.shape[1]
+            vx, vy, vz = uv_to_cart(uf, vf, lam_a, phi_a)
+            r = self.remap_slices(np.concatenate([vx, vy, vz], axis=1),
+                                  col2pij, mode)
+            ub, vb = cart_to_uv(r[:, :nsl], r[:, nsl:2 * nsl],
+                                r[:, 2 * nsl:], lam_b, phi_b)
+            return (ub.T.reshape(shp[:-1] + (nlat, nlon)),
+                    vb.T.reshape(shp[:-1] + (nlat, nlon)))
+
+        if varu.dimensions and varu.dimensions[0] == "time":
+            for t in range(varu.shape[0]):
+                ub, vb = do_slab(np.asarray(varu[t], dtype=np.float64),
+                                 np.asarray(varv[t], dtype=np.float64))
+                nvs[0][t] = ub
+                nvs[1][t] = vb
+        else:
+            ub, vb = do_slab(np.asarray(varu[:], dtype=np.float64),
+                             np.asarray(varv[:], dtype=np.float64))
+            nvs[0][:] = ub
+            nvs[1][:] = vb
+        if verbose:
+            print(f"  {ua}+{va} (vector, {mode_name})")

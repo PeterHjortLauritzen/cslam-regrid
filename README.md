@@ -88,6 +88,24 @@ Limiter modes (per variable):
   clip legitimate maxima.
 - `none`: the pure linear high-order operator (diagnostics).
 
+**Vector fields** (winds, stresses, momentum tendencies) are remapped as
+vectors: (u,v) is rotated to Cartesian (vx,vy,vz) with the local east/north
+basis at the source cells, the three components are remapped as smooth
+scalars, and the result is projected back onto the destination basis. This
+removes the large componentwise errors where the (u,v) basis rotates
+rapidly: for solid-body rotation over the poles the error drops ~90x
+(componentwise linf 4.8e-2 vs vector 5.2e-4, ne16 -> 4 deg). Pairs are
+**auto-detected from metadata** — name pattern `U*`/`V*` or `*X`/`*Y` plus
+zonal/meridional `long_name`s and matching dimensions — which pairs U/V,
+UBOT/VBOT, TAUX/TAUY, UTEND_*/VTEND_* and correctly leaves scalars like U10
+("10m wind speed") alone. Use `--vectors U:V,...` to add pairs explicitly
+and `--no-vector-detect` to disable detection. Vector pairs default to
+limiter `none` (components are not bounded quantities; Cartesian bounds are
+frame-dependent); override per pair via `--limiter-overrides U=shape`.
+Conservation holds for the area integral of the Cartesian vector — the
+physically meaningful statement. Each output component records
+`cslam_vector_pair` and `cslam_limiter` attributes.
+
 Performance: a 135-level 3-D field (ne30pg3 → 257×512) remaps in ~0.15 s
 on 8 cores; time-series throughput is I/O-bound.
 

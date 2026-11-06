@@ -66,13 +66,14 @@ def cmd_weights(args):
 
 
 def _apply_one(weight_path, infile, outfile, variables, limiter, overrides,
-               nthreads):
+               vectors, auto_vectors, nthreads):
     from .apply import RemapEngine
     eng = RemapEngine(weight_path, nthreads=nthreads)
     t0 = time.time()
     print(f"{infile} -> {outfile}")
     eng.remap_file(infile, outfile, variables=variables,
-                   default_limiter=limiter, limiter_overrides=overrides)
+                   default_limiter=limiter, limiter_overrides=overrides,
+                   vectors=vectors, auto_vectors=auto_vectors)
     print(f"  done ({time.time()-t0:.1f}s)")
 
 
@@ -85,6 +86,14 @@ def cmd_apply(args):
                 sys.exit(f"unknown limiter mode '{mode}' for {name}")
             overrides[name.strip()] = mode.strip()
     variables = args.vars.split(",") if args.vars else None
+    vectors = []
+    if args.vectors:
+        for item in args.vectors.split(","):
+            try:
+                ua, va = item.split(":")
+            except ValueError:
+                sys.exit(f"--vectors entry '{item}' not of the form U:V")
+            vectors.append((ua.strip(), va.strip()))
 
     if args.out and len(args.infiles) > 1:
         sys.exit("--out only valid with a single input file; use --out-dir")
@@ -101,17 +110,19 @@ def cmd_apply(args):
             sys.exit(f"refusing to overwrite input {infile}")
         jobs.append((infile, outfile))
 
+    auto_vec = not args.no_vector_detect
     if args.jobs > 1 and len(jobs) > 1:
         with cf.ProcessPoolExecutor(max_workers=args.jobs) as ex:
             futs = [ex.submit(_apply_one, args.map, i, o, variables,
-                              args.limiter, overrides, args.nthreads)
+                              args.limiter, overrides, vectors, auto_vec,
+                              args.nthreads)
                     for i, o in jobs]
             for f in futs:
                 f.result()
     else:
         for i, o in jobs:
             _apply_one(args.map, i, o, variables, args.limiter, overrides,
-                       args.nthreads)
+                       vectors, auto_vec, args.nthreads)
 
 
 def cmd_info(args):
@@ -195,6 +206,12 @@ def main(argv=None):
     pa.add_argument("--limiter", choices=("shape", "posdef", "none"),
                     default="shape")
     pa.add_argument("--limiter-overrides", metavar="VAR=MODE,...")
+    pa.add_argument("--vectors", metavar="U:V,TAUX:TAUY,...",
+                    help="explicit vector pairs remapped via Cartesian "
+                         "components (auto-detected from metadata by "
+                         "default; vectors default to limiter 'none')")
+    pa.add_argument("--no-vector-detect", action="store_true",
+                    help="disable metadata-based vector pair detection")
     pa.add_argument("--nthreads", type=int, default=0,
                     help="OpenMP threads for the apply kernel")
     pa.add_argument("--jobs", type=int, default=1,
