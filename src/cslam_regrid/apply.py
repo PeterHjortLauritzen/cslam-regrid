@@ -93,9 +93,12 @@ class RemapEngine:
         attrs["history"] = stamp + "\n" + str(attrs.get("history", ""))
         out.setncatts(attrs)
 
-        # --- dimensions: all except ncol, plus lat/lon
+        # --- dimensions: all except ncol and other native-grid dimensions
+        # (ncol_d GLL, ncol_fvm, ...: their variables cannot share the
+        # lat-lon grid and are skipped), plus lat/lon
+        native_dims = {d for d in src_ds.dimensions if d.startswith("ncol")}
         for name, dim in src_ds.dimensions.items():
-            if name == "ncol":
+            if name in native_dims:
                 continue
             out.createDimension(name, None if dim.isunlimited() else len(dim))
         out.createDimension("lat", nlat)
