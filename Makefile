@@ -12,6 +12,9 @@ LIB      = src/cslam_regrid/libcslamregrid.so
 SRC = src/fortran/cr_kinds.F90 \
       src/fortran/cr_gnomonic.F90 \
       src/fortran/cr_moments.F90 \
+      src/fortran/cr_grid.F90 \
+      src/fortran/cr_recon.F90 \
+      src/fortran/cr_apply.F90 \
       src/fortran/cr_capi.F90
 
 ifeq ($(findstring ifx,$(FC)),ifx)

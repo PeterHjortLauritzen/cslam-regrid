@@ -7,6 +7,8 @@ module cr_capi
   use cr_kinds
   use cr_gnomonic
   use cr_moments
+  use cr_grid,  only: panel_grid_t, grid_init
+  use cr_apply, only: apply_slices, slice_recon
   implicit none
 
 contains
@@ -93,5 +95,75 @@ contains
     real(c_double), intent(out) :: mom(6)
     call cell_moments(x1, x2, y1, y2, mom)
   end subroutine c_cell_moments
+
+  !------------------------- grid geometry -------------------------------
+
+  subroutine c_grid_geometry(n, xe, xc, area, centroid, metrics, &
+                             metrics_int, stretch, vtxw) bind(C, name="cr_grid_geometry")
+    integer(c_int), intent(in), value :: n
+    real(c_double), intent(out) :: xe(0:n), xc(n), area(n, n)
+    real(c_double), intent(out) :: centroid(5, n, n), metrics(3, n, n)
+    real(c_double), intent(out) :: metrics_int(3, n, n), stretch(7, n, n)
+    real(c_double), intent(out) :: vtxw(4, 5, n, n)
+    type(panel_grid_t) :: g
+    call grid_init(g, n)
+    xe = g%xe; xc = g%xc; area = g%area
+    centroid = g%centroid; metrics = g%metrics
+    metrics_int = g%metrics_int; stretch = g%stretch; vtxw = g%vtxw
+  end subroutine c_grid_geometry
+
+  !---------------------- per-slice reconstruction ------------------------
+  ! (test/diagnostic entry: returns the reconstruction coefficients and
+  !  both halo arrays for one field slice)
+
+  subroutine c_slice_recon(n, ncol, col2pij, nhi, hi_dst, hi_src, hi_w,  &
+                           nli, li_dst, li_src, stretch, centroid,       &
+                           metrics, metrics_int, vtxw, xe, limiter_mode, &
+                           f_slice, fext, flim, rec) bind(C, name="cr_slice_recon")
+    integer(c_int), intent(in), value :: n, ncol, nhi, nli, limiter_mode
+    integer(c_int), intent(in)  :: col2pij(3, ncol)
+    integer(c_int), intent(in)  :: hi_dst(3, nhi), hi_src(3, 3, nhi)
+    real(c_double), intent(in)  :: hi_w(3, nhi)
+    integer(c_int), intent(in)  :: li_dst(3, nli), li_src(3, nli)
+    real(c_double), intent(in)  :: stretch(7, n, n), centroid(5, n, n)
+    real(c_double), intent(in)  :: metrics(3, n, n), metrics_int(3, n, n)
+    real(c_double), intent(in)  :: vtxw(4, 5, n, n), xe(0:n)
+    real(c_double), intent(in)  :: f_slice(ncol)
+    real(c_double), intent(out) :: fext(-1:n+2, -1:n+2, 6)
+    real(c_double), intent(out) :: flim(0:n+1, 0:n+1, 6)
+    real(c_double), intent(out) :: rec(6, n, n, 6)
+    call slice_recon(n, ncol, col2pij, nhi, hi_dst, hi_src, hi_w, nli,   &
+                     li_dst, li_src, stretch, centroid, metrics,         &
+                     metrics_int, vtxw, xe, limiter_mode, f_slice,       &
+                     fext, flim, rec)
+  end subroutine c_slice_recon
+
+  !---------------------------- apply ------------------------------------
+
+  subroutine c_apply_slices(n, ncol, nslice, nb, col2pij,                &
+                            nhi, hi_dst, hi_src, hi_w,                   &
+                            nli, li_dst, li_src,                         &
+                            stretch, centroid, metrics, metrics_int,     &
+                            vtxw, xe, npair, pr_src, pr_dst, smat,       &
+                            area_b, limiter_mode, f_in, f_out)           &
+                            bind(C, name="cr_apply_slices")
+    integer(c_int), intent(in), value :: n, ncol, nslice, nb, nhi, nli, npair
+    integer(c_int), intent(in), value :: limiter_mode
+    integer(c_int), intent(in)  :: col2pij(3, ncol)
+    integer(c_int), intent(in)  :: hi_dst(3, nhi), hi_src(3, 3, nhi)
+    real(c_double), intent(in)  :: hi_w(3, nhi)
+    integer(c_int), intent(in)  :: li_dst(3, nli), li_src(3, nli)
+    real(c_double), intent(in)  :: stretch(7, n, n), centroid(5, n, n)
+    real(c_double), intent(in)  :: metrics(3, n, n), metrics_int(3, n, n)
+    real(c_double), intent(in)  :: vtxw(4, 5, n, n), xe(0:n)
+    integer(c_int), intent(in)  :: pr_src(3, npair), pr_dst(npair)
+    real(c_double), intent(in)  :: smat(6, npair), area_b(nb)
+    real(c_double), intent(in)  :: f_in(ncol, nslice)
+    real(c_double), intent(out) :: f_out(nb, nslice)
+    call apply_slices(n, ncol, nslice, nb, col2pij, nhi, hi_dst, hi_src, &
+                      hi_w, nli, li_dst, li_src, stretch, centroid,      &
+                      metrics, metrics_int, vtxw, xe, npair, pr_src,     &
+                      pr_dst, smat, area_b, limiter_mode, f_in, f_out)
+  end subroutine c_apply_slices
 
 end module cr_capi

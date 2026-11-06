@@ -29,11 +29,29 @@ def _load():
     lib.cr_seg_w6_parallel_po.argtypes = [_c_dbl, _c_dbl, _c_dbl, _c_dbl, _dp]
     lib.cr_cell_moments.argtypes = [_c_dbl, _c_dbl, _c_dbl, _c_dbl, _dp]
 
+    lib.cr_grid_geometry.argtypes = [_c_int] + [_dp]*8
+    lib.cr_slice_recon.argtypes = [
+        _c_int, _c_int, _ip,                 # n, ncol, col2pij
+        _c_int, _ip, _ip, _dp,               # nhi, hi_dst, hi_src, hi_w
+        _c_int, _ip, _ip,                    # nli, li_dst, li_src
+        _dp, _dp, _dp, _dp, _dp, _dp,        # geometry
+        _c_int, _dp, _dp, _dp, _dp,          # limiter, f, fext, flim, rec
+    ]
+    lib.cr_apply_slices.argtypes = [
+        _c_int, _c_int, _c_int, _c_int, _ip,  # n, ncol, nslice, nb, col2pij
+        _c_int, _ip, _ip, _dp,                # nhi, hi_dst, hi_src, hi_w
+        _c_int, _ip, _ip,                     # nli, li_dst, li_src
+        _dp, _dp, _dp, _dp, _dp, _dp,         # geometry
+        _c_int, _ip, _ip, _dp, _dp,           # npair, pr_src, pr_dst, smat, area_b
+        _c_int, _dp, _dp,                     # limiter, f_in, f_out
+    ]
+
     for fn in (lib.cr_lonlat_from_panel, lib.cr_panel_from_lonlat,
                lib.cr_cart_from_panel, lib.cr_panel_point_from_lonlat,
                lib.cr_seg_w6_horizontal, lib.cr_seg_w6_parallel_eq,
                lib.cr_seg_w6_parallel_po, lib.cr_seg_w6_meridian_po,
-               lib.cr_cell_moments):
+               lib.cr_cell_moments, lib.cr_grid_geometry,
+               lib.cr_slice_recon, lib.cr_apply_slices):
         fn.restype = None
     return lib
 
@@ -106,3 +124,68 @@ def cell_moments(x1, x2, y1, y2):
     mom = np.zeros(6, dtype=np.float64, order="F")
     _lib.cr_cell_moments(x1, x2, y1, y2, mom)
     return mom
+
+
+def grid_geometry(n):
+    """Per-cell panel geometry (identical on all six panels)."""
+    F = dict(dtype=np.float64, order="F")
+    out = dict(
+        xe=np.zeros(n + 1, **F),
+        xc=np.zeros(n, **F),
+        area=np.zeros((n, n), **F),
+        centroid=np.zeros((5, n, n), **F),
+        metrics=np.zeros((3, n, n), **F),
+        metrics_int=np.zeros((3, n, n), **F),
+        stretch=np.zeros((7, n, n), **F),
+        vtxw=np.zeros((4, 5, n, n), **F),
+    )
+    _lib.cr_grid_geometry(n, out["xe"], out["xc"], out["area"],
+                          out["centroid"], out["metrics"], out["metrics_int"],
+                          out["stretch"], out["vtxw"])
+    return out
+
+
+def _fi(a):
+    return np.asfortranarray(np.asarray(a, dtype=np.int32))
+
+
+def _fd(a):
+    return np.asfortranarray(np.asarray(a, dtype=np.float64))
+
+
+def slice_recon(n, col2pij, halo, geom, limiter_mode, f_slice):
+    """Reconstruction coefficients + halo arrays for one ncol slice."""
+    ncol = f_slice.size
+    fext = np.zeros((n + 4, n + 4, 6), dtype=np.float64, order="F")
+    flim = np.zeros((n + 2, n + 2, 6), dtype=np.float64, order="F")
+    rec = np.zeros((6, n, n, 6), dtype=np.float64, order="F")
+    _lib.cr_slice_recon(
+        n, ncol, _fi(col2pij),
+        halo["hi_dst"].shape[1], _fi(halo["hi_dst"]), _fi(halo["hi_src"]),
+        _fd(halo["hi_w"]),
+        halo["li_dst"].shape[1], _fi(halo["li_dst"]), _fi(halo["li_src"]),
+        _fd(geom["stretch"]), _fd(geom["centroid"]), _fd(geom["metrics"]),
+        _fd(geom["metrics_int"]), _fd(geom["vtxw"]), _fd(geom["xe"]),
+        int(limiter_mode), _fd(f_slice), fext, flim, rec)
+    return fext, flim, rec
+
+
+def apply_slices(n, nb, col2pij, halo, geom, pairs, area_b, limiter_mode, f_in):
+    """Remap f_in(ncol, nslice) -> (nb, nslice)."""
+    f_in = np.asarray(f_in, dtype=np.float64)
+    if f_in.ndim == 1:
+        f_in = f_in[:, None]
+    f_in = np.asfortranarray(f_in)
+    ncol, nslice = f_in.shape
+    f_out = np.zeros((nb, nslice), dtype=np.float64, order="F")
+    npair = pairs["dst"].size
+    _lib.cr_apply_slices(
+        n, ncol, nslice, nb, _fi(col2pij),
+        halo["hi_dst"].shape[1], _fi(halo["hi_dst"]), _fi(halo["hi_src"]),
+        _fd(halo["hi_w"]),
+        halo["li_dst"].shape[1], _fi(halo["li_dst"]), _fi(halo["li_src"]),
+        _fd(geom["stretch"]), _fd(geom["centroid"]), _fd(geom["metrics"]),
+        _fd(geom["metrics_int"]), _fd(geom["vtxw"]), _fd(geom["xe"]),
+        npair, _fi(pairs["src"]), _fi(pairs["dst"]), _fd(pairs["S"]),
+        _fd(area_b), int(limiter_mode), f_in, f_out)
+    return f_out
