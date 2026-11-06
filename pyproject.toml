@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cslam-regrid"
+dynamic = ["version"]
+description = "Conservative, shape-preserving, geometrically exact remapping of CESM/CAM gnomonic cubed-sphere physics-grid output to lat-lon using CSLAM reconstruction technology"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy", "netCDF4"]
+
+[project.scripts]
+cslam-regrid = "cslam_regrid.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cslam_regrid = ["libcslamregrid.so"]
+
+[tool.setuptools.dynamic]
+version = {attr = "cslam_regrid.__version__"}

@@ -13,6 +13,12 @@ module cr_capi
 
 contains
 
+  subroutine c_set_num_threads(nt) bind(C, name="cr_set_num_threads")
+    !$ use omp_lib, only: omp_set_num_threads
+    integer(c_int), intent(in), value :: nt
+    !$ if (nt > 0) call omp_set_num_threads(nt)
+  end subroutine c_set_num_threads
+
   !----------------------------- transforms ------------------------------
 
   subroutine c_lonlat_from_panel(n, x, y, ip, lon, lat) bind(C, name="cr_lonlat_from_panel")
