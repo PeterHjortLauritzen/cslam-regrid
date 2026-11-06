@@ -168,21 +168,38 @@ and tested against adaptive quadrature to machine precision):
 - **Meridian, polar panel** (radial line y = m·x): ρ = √(1+(1+m²)x²);
   standard closed forms (atan/asinh/log family).
 
-**Overlap decomposition** avoids general polygon clipping:
+**Overlap decomposition — global line walks (GECoRe architecture).** No 2-D
+polygons are ever formed, and no connectivity assumptions are made (this matters:
+for odd N = 3·ne the pole lies *inside* a source cell and a polar-cap destination
+cell can be wholly interior to it). Because our basis is absolute monomials per
+panel (no per-cell recentering of potentials, unlike GECoRe's centered basis),
+the assembly collapses to one uniform rule. Per panel, walk every
+non-vertical boundary line of either grid, split it into segments at every event
+(source x/y-line crossing, meridian crossing, parallel crossing, panel boundary),
+and for each segment from x_a→x_b compute W_k = ∫ F_k dx in closed form. Then:
 
-- *Equatorial panels*: a destination cell is a vertical strip (two meridians =
-  x=const) intersected with a band between two parallel curves, both graphs of
-  even, monotone-in-|x| functions y(x). The overlap with a gnomonic rectangle is
-  **y-simple**: w_k = ∫ [P_k(x, y_top(x)) − P_k(x, y_bot(x))] dx with piecewise
-  y_top/y_bot (const or parallel curve), breakpoints at the closed-form crossings
-  x = ±√((y/t)² − 1). Direct, walk-free, per-pair independent.
-- *Polar panels*: overlap of a gnomonic rectangle with an annular wedge
-  (r ∈ [cot φ₂, cot φ₁] × lon wedge). Evaluated by signed decomposition into the
-  same primitives (rectangle ∩ disk, rectangle ∩ half-plane through origin),
-  each a closed-contour integral over segments of the three primitive curve types.
-  Crossing formulas as in GECoRe's search (x = ±√(r² − y²), radial-line hits).
-- *Pole caps* (grids with pole-centered cells / CMIP cells touching ±90°): the
-  polar destination cell's boundary is a single parallel circle; rectangle ∩ disk.
+  **each segment contributes −W_k to pair (S_above, D_above) and +W_k to
+  (S_below, D_below)**,
+
+where S_above/S_below are the source cells and D_above/D_below the destination
+cells immediately above/below the segment (evaluated at y ± ε). For an interior
+source grid line D_above = D_below (one destination cell, two source cells); for
+a destination curve inside a source cell S_above = S_below; coincident cases
+(equator on the panel y=0 grid line; polar-panel lon edges at 90°/270° lying on
+the y=0 line) are handled by the same rule with all four neighbors distinct.
+Vertical lines (source x-edges, equatorial-panel meridians, panel seams x=±1)
+contribute exactly zero with dx-potentials and are skipped.
+
+Curves walked per panel: the N+1 horizontal source grid lines; every parallel
+arc present on the panel (equatorial: y = t√(1+x²), present where
+|t|√(1+x²) ≤ 1, i.e. all parallels with |φ| ≤ 45°, partial arcs for
+35.26° < |φ| < 45°; polar: circle arcs x²+y² = cot²φ); and on polar panels the
+meridians (radial lines y = m·x). Crossing abscissae are closed-form
+(x = ±√((y/t)²−1), x = ±√(r²−y²), radial/line intersections). Pole caps need no
+special case: D_above at the pole is the cap cell. Floating-point robustness
+follows GECoRe: scale-aware snapping (1e-12), tangency tolerance, zero-length
+segments dropped; the ±ε cell queries are index computations, not float
+comparisons, with coincidence resolved by the snapping step.
 
 Floating-point robustness follows GECoRe: snapping tolerance (1e-12 scale-aware),
 coincident-line rules (lat edge on the equator = panel y=0 line; lon edge on a
