@@ -45,13 +45,23 @@ def _load():
         _c_int, _ip, _ip, _dp, _dp,           # npair, pr_src, pr_dst, smat, area_b
         _c_int, _dp, _dp,                     # limiter, f_in, f_out
     ]
+    lib.cr_apply_slices_masked.argtypes = [
+        _c_int, _c_int, _c_int, _c_int, _ip,  # n, ncol, nslice, nb, col2pij
+        _c_int, _ip, _ip, _dp,                # nhi, hi_dst, hi_src, hi_w
+        _c_int, _ip, _ip,                     # nli, li_dst, li_src
+        _dp, _dp, _dp, _dp, _dp, _dp,         # geometry
+        _c_int, _ip, _ip, _dp, _dp,           # npair, pr_src, pr_dst, smat, area_b
+        _c_int, _c_dbl, _c_dbl,               # limiter, frac_tol, fillval
+        _dp, _ip, _dp, _dp, _dp,              # lf, mask, f_in, f_out, frac_out
+    ]
 
     for fn in (lib.cr_lonlat_from_panel, lib.cr_panel_from_lonlat,
                lib.cr_cart_from_panel, lib.cr_panel_point_from_lonlat,
                lib.cr_seg_w6_horizontal, lib.cr_seg_w6_parallel_eq,
                lib.cr_seg_w6_parallel_po, lib.cr_seg_w6_meridian_po,
                lib.cr_cell_moments, lib.cr_grid_geometry,
-               lib.cr_slice_recon, lib.cr_apply_slices):
+               lib.cr_slice_recon, lib.cr_apply_slices,
+               lib.cr_apply_slices_masked):
         fn.restype = None
     return lib
 
@@ -189,3 +199,36 @@ def apply_slices(n, nb, col2pij, halo, geom, pairs, area_b, limiter_mode, f_in):
         npair, _fi(pairs["src"]), _fi(pairs["dst"]), _fd(pairs["S"]),
         _fd(area_b), int(limiter_mode), f_in, f_out)
     return f_out
+
+
+def apply_slices_masked(n, nb, col2pij, halo, geom, pairs, area_b,
+                        limiter_mode, lf, mask, f_in, frac_tol=0.0,
+                        fillval=np.nan):
+    """Masked/fracarea remap: f_in(ncol, nslice) with per-slice validity
+    mask(ncol, nslice) and per-cell area fraction lf(ncol) -> values that
+    are means over the covered portion of each destination cell, plus the
+    covered fraction frac(nb, nslice).  Cells with coverage <=
+    frac_tol*area get fillval."""
+    f_in = np.asarray(f_in, dtype=np.float64)
+    if f_in.ndim == 1:
+        f_in = f_in[:, None]
+    f_in = np.asfortranarray(f_in)
+    ncol, nslice = f_in.shape
+    mask = np.asarray(mask, dtype=np.int32)
+    if mask.ndim == 1:
+        mask = mask[:, None]
+    mask = np.asfortranarray(np.broadcast_to(mask, (ncol, nslice)))
+    f_out = np.zeros((nb, nslice), dtype=np.float64, order="F")
+    frac_out = np.zeros((nb, nslice), dtype=np.float64, order="F")
+    npair = pairs["dst"].size
+    _lib.cr_apply_slices_masked(
+        n, ncol, nslice, nb, _fi(col2pij),
+        halo["hi_dst"].shape[1], _fi(halo["hi_dst"]), _fi(halo["hi_src"]),
+        _fd(halo["hi_w"]),
+        halo["li_dst"].shape[1], _fi(halo["li_dst"]), _fi(halo["li_src"]),
+        _fd(geom["stretch"]), _fd(geom["centroid"]), _fd(geom["metrics"]),
+        _fd(geom["metrics_int"]), _fd(geom["vtxw"]), _fd(geom["xe"]),
+        npair, _fi(pairs["src"]), _fi(pairs["dst"]), _fd(pairs["S"]),
+        _fd(area_b), int(limiter_mode), float(frac_tol), float(fillval),
+        _fd(lf), mask, f_in, f_out, frac_out)
+    return f_out, frac_out

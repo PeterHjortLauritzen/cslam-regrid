@@ -66,14 +66,15 @@ def cmd_weights(args):
 
 
 def _apply_one(weight_path, infile, outfile, variables, limiter, overrides,
-               vectors, auto_vectors, nthreads):
+               vectors, auto_vectors, frac_tol, nthreads):
     from .apply import RemapEngine
     eng = RemapEngine(weight_path, nthreads=nthreads)
     t0 = time.time()
     print(f"{infile} -> {outfile}")
     eng.remap_file(infile, outfile, variables=variables,
                    default_limiter=limiter, limiter_overrides=overrides,
-                   vectors=vectors, auto_vectors=auto_vectors)
+                   vectors=vectors, auto_vectors=auto_vectors,
+                   frac_tol=frac_tol)
     print(f"  done ({time.time()-t0:.1f}s)")
 
 
@@ -115,14 +116,14 @@ def cmd_apply(args):
         with cf.ProcessPoolExecutor(max_workers=args.jobs) as ex:
             futs = [ex.submit(_apply_one, args.map, i, o, variables,
                               args.limiter, overrides, vectors, auto_vec,
-                              args.nthreads)
+                              args.frac_tol, args.nthreads)
                     for i, o in jobs]
             for f in futs:
                 f.result()
     else:
         for i, o in jobs:
             _apply_one(args.map, i, o, variables, args.limiter, overrides,
-                       vectors, auto_vec, args.nthreads)
+                       vectors, auto_vec, args.frac_tol, args.nthreads)
 
 
 def cmd_info(args):
@@ -140,10 +141,15 @@ def cmd_info(args):
         print(f"  pairs: {w['pairs']['dst'].size}")
     for f in args.files:
         ds = netCDF4.Dataset(f)
-        ncol = len(ds.dimensions["ncol"]) if "ncol" in ds.dimensions else None
+        spatial = "ncol" if "ncol" in ds.dimensions else \
+            ("lndgrid" if "lndgrid" in ds.dimensions else None)
+        ncol = len(ds.dimensions[spatial]) if spatial else None
         nvar = sum(1 for v in ds.variables.values()
-                   if "ncol" in v.dimensions and v.dimensions[-1] == "ncol")
-        print(f"{f}: ncol={ncol}, remappable variables: {nvar}, "
+                   if spatial and spatial in v.dimensions
+                   and v.dimensions[-1] == spatial)
+        kind = f"{spatial}={ncol}" + \
+            (" (land, masked fracarea)" if spatial == "lndgrid" else "")
+        print(f"{f}: {kind}, remappable variables: {nvar}, "
               f"format={ds.data_model}")
         if ncol:
             n = int(round((ncol / 6) ** 0.5))
@@ -212,6 +218,10 @@ def main(argv=None):
                          "default; vectors default to limiter 'none')")
     pa.add_argument("--no-vector-detect", action="store_true",
                     help="disable metadata-based vector pair detection")
+    pa.add_argument("--frac-tol", type=float, default=1e-8,
+                    help="masked (land) files: destination cells whose "
+                         "covered fraction is <= this get _FillValue "
+                         "(default 1e-8)")
     pa.add_argument("--nthreads", type=int, default=0,
                     help="OpenMP threads for the apply kernel")
     pa.add_argument("--jobs", type=int, default=1,

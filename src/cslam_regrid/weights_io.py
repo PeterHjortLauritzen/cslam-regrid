@@ -1,8 +1,11 @@
 """Self-describing netCDF weight file: everything the apply stage needs.
 
-Format version 1.  Reserved for v2 (masked/fracarea support): grid_imask_a,
-frac_b.  Array index conventions are Fortran 1-based, as consumed by
-libcslamregrid; dtypes are preserved exactly (int32 / float64).
+Format version 1.  The weight file is pure exact geometry and is shared by
+atmosphere (CAM) and land (CLM) files alike: masking/fracarea for land data
+is dynamic at apply time (CLM valid sets are field- and time-dependent), so
+grid_imask_a/frac_b stay at their unmasked values.  Array index conventions
+are Fortran 1-based, as consumed by libcslamregrid; dtypes are preserved
+exactly (int32 / float64).
 """
 from __future__ import annotations
 
@@ -93,12 +96,15 @@ def write_weights(path, src: SourceGrid, dst: DestGrid, halo, pairs, diags,
         v = put("w", dst.lat_weights(), ("nlat",))
         v.long_name = "latitude weights"
 
-        # reserved for masked (fracarea) support in format v2
+        # unmasked by construction: land/masked data is handled dynamically
+        # at apply time (per-field validity + landfrac), weights stay pure
+        # exact geometry
         v = put("grid_imask_a", np.ones(6 * n * n, dtype=np.int32), ("na",))
-        v.comment = "source mask; reserved for masked maps (v2)"
+        v.comment = "source mask; always 1 (masking is dynamic at apply time)"
         v = ds.createVariable("frac_b", "f8", ("nb",), zlib=True, complevel=1)
         v[:] = 1.0
-        v.comment = "destination fraction; reserved for masked maps (v2)"
+        v.comment = ("destination fraction; always 1 (fracarea for land "
+                     "data is dynamic at apply time)")
     finally:
         ds.close()
 

@@ -61,6 +61,38 @@ class SourceGrid:
         out[2] = j
         return out
 
+    def col2pij_partial(self, lon_deg, lat_deg, colok):
+        """col2pij for files whose coordinates are only defined on a subset
+        of columns (CLM writes _FillValue lat/lon over ocean).  Columns with
+        colok False get the placeholder target (1,1,1); the masked apply
+        kernel never scatters them.  The valid subset must be injective."""
+        colok = np.asarray(colok, dtype=bool)
+        lon = np.deg2rad(np.asarray(lon_deg, dtype=np.float64)[colok])
+        lat = np.deg2rad(np.asarray(lat_deg, dtype=np.float64)[colok])
+        if colok.size != self.ncol:
+            raise ValueError(
+                f"file has ncol={colok.size}, grid expects {self.ncol} "
+                f"(n={self.n})")
+        x, y, p = fk.panel_from_lonlat(lon, lat)
+        d = HALFPI / self.n
+        i = np.floor((np.arctan(x) + np.pi / 4) / d).astype(np.int64) + 1
+        j = np.floor((np.arctan(y) + np.pi / 4) / d).astype(np.int64) + 1
+        i = np.clip(i, 1, self.n)
+        j = np.clip(j, 1, self.n)
+        lin = ((p.astype(np.int64) - 1) * self.n + (j - 1)) * self.n + (i - 1)
+        counts = np.bincount(lin, minlength=self.ncol)
+        if counts.max() > 1:
+            bad = int((counts > 1).sum())
+            raise ValueError(
+                f"ncol -> cell mapping is not injective ({bad} cells hit "
+                "more than once); is this file really on the expected "
+                "pg grid?")
+        out = np.ones((3, self.ncol), dtype=np.int32)
+        out[0, colok] = p
+        out[1, colok] = i
+        out[2, colok] = j
+        return out
+
 
 # ---------------------------------------------------------------------------
 # destination grids

@@ -1,8 +1,8 @@
 # cslam-regrid
 
-Conservative, shape-preserving, geometrically exact remapping of CESM/CAM
-native cubed-sphere physics-grid history output (regular ne·pg3) to
-latitude-longitude grids, built from CSLAM technology:
+Conservative, shape-preserving, geometrically exact remapping of CESM
+native cubed-sphere physics-grid history output (regular ne·pg3; CAM *and*
+CLM) to latitude-longitude grids, built from CSLAM technology:
 
 - **High order**: the CAM-SE/CSLAM quadratic reconstruction (`irecons=6`),
   ported from `fvm_reconstruction_mod.F90` — 3rd-order on smooth fields.
@@ -106,8 +106,37 @@ Conservation holds for the area integral of the Cartesian vector — the
 physically meaningful statement. Each output component records
 `cslam_vector_pair` and `cslam_limiter` attributes.
 
+**Land (CLM) files** are detected by their `lndgrid` dimension and take a
+masked **fracarea** path, using the *same* weight file as the atmosphere
+(the weights are pure geometry; all masking is dynamic at apply time —
+necessarily so, because CLM valid cell sets differ per field, per soil
+level and even per time step):
+
+- source moments are weighted by `landfrac` (fractional on coasts), so the
+  **land-area integral is conserved** (to ~1e-13 of itself; the float32
+  `landfrac` in the file bounds the absolute bookkeeping at ~1e-7);
+- each output value is the mean over the **covered (land) portion** of the
+  lat-lon cell — constants are reproduced exactly on the covered region —
+  and destination `landfrac`/`landmask` are written to the output;
+- the validity mask is taken per field/level/record from the fill pattern
+  (handles TLAKE-style sparse fields and time-varying crop masks);
+- cells whose reconstruction stencil touches an invalid cell fall back to
+  first order (shape-safe); limiter bounds use valid neighbors only;
+- destination cells with covered fraction ≤ `--frac-tol` (default 1e-8)
+  are `_FillValue`.
+
+```bash
+# same map as the atmosphere:
+cslam-regrid apply --map map_ne30pg3_to_offset_180x360_cslam.nc \
+    run.clm2.h0a.0001-*.nc --out-dir latlon/ --jobs 4
+```
+
 Performance: a 135-level 3-D field (ne30pg3 → 257×512) remaps in ~0.15 s
-on 8 cores; time-series throughput is I/O-bound.
+on 8 cores; a full CLM monthly file (~600 fields incl. soil levels,
+ne30pg3 → 1°) takes ~18 s per process.  Output files are assembled in
+memory and flushed once at close (netCDF3 re-layout on incremental defines
+is O(n²) in variable count), so each apply process needs RAM of roughly
+the output file size.
 
 ## Notes and caveats
 
@@ -121,8 +150,9 @@ on 8 cores; time-series throughput is I/O-bound.
   line-integral potentials; invisible in float32 output and irrelevant to
   conservation (machine-exact). ESMF instead normalizes constants exactly
   but is only roundoff-conservative; we keep geometric exactness.
-- v1 is unmasked (CAM). The weight-file format reserves mask/fraction
-  fields for masked (CLM/fracarea) support in v2.
+- CLM sub-grid output (`gridcell`/`landunit`/`column`/`pft` vectors) is
+  not on the grid and is skipped; vector pairs are not supported on
+  masked (land) files.
 
 ## Layout
 

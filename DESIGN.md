@@ -370,3 +370,50 @@ Reference materials: dycore sources (fvm_reconstruction_mod.F90,
 fvm_analytic_mod.F90, fvm_overlap_mod.F90, dp_mapping.F90), GECoRe C++
 (search/crossing formulas, robustness rules), CSLAM (Lauritzen, Nair & Ullrich
 2010 JCP) and GECoRe (Ullrich, Lauritzen & Jablonowski 2009 MWR) papers.
+
+## 10. Land (CLM) files: masked fracarea remapping
+
+Native CLM history on ne·pg3 writes the **full physics grid** (`lndgrid` =
+ncol, same ordering as CAM) with `_FillValue` over ocean — including the
+`lat`/`lon`/`area` coordinates — and a fractional `landfrac` on coasts.
+Valid cell sets are **per field, per level and per time step** (e.g. TSOI
+excludes lake-only cells, TLAKE covers only lakes, crop-economics fields
+change month to month), so a static mask baked into the weights (the ESMF
+model) cannot represent the data.  Design (user-locked 2026-11-09):
+
+1. **Weights stay pure exact geometry** — the same map file serves CAM and
+   CLM.  All masking is dynamic at apply time.
+2. **Fractional weighting**: land is assumed uniformly distributed within a
+   source cell; all six overlap moments of cell `a` are weighted by
+   `landfrac_a`.  The conserved quantity is the land integral
+   Σ f·landfrac·ΔA.
+3. **fracarea normalization**: each destination value is num/den with
+   den = Σ landfrac·w₁ over valid source cells — the mean over the land
+   portion of the destination cell (what CLM itself reports, and what CMIP
+   expects next to sftlf).  Constants are reproduced exactly on the covered
+   region regardless of the mask.  Destination `landfrac` (= den/area) and
+   `landmask` are written to the output; cells with coverage ≤ `--frac-tol`
+   (default 1e-8, guards roundoff-level slivers) get `_FillValue`.
+4. **Dynamic validity**: the mask comes from each slice's own fill pattern,
+   intersected with the columns that have coordinates (`col2pij_partial`
+   maps only those; the masked scatter never touches the rest).
+5. **Reconstruction at the mask edge**: validity propagates through both
+   halos (an interpolated halo cell is valid iff all three Lagrange sources
+   are; the raw limiter halo copies validity).  A cell whose FD stencil
+   (the 12 fext neighbors of g2..g6) touches an invalid entry falls back to
+   first order (its mean) — conservative and trivially in bounds; interior
+   land keeps the full quadratic.
+6. **Limiter bounds from valid neighbors only** (3×3 patch ∩ valid).
+7. **Self-contained landfrac**: read from the file being remapped (float32
+   → the land-integral bookkeeping is exact to ~1e-7 relative against the
+   model's internal double-precision fractions; the remap arithmetic itself
+   conserves its own landfrac-weighted integral to ~1e-13).
+8. Scope: `(time[, lev], lndgrid)` float fields.  The compressed sub-grid
+   vectors (`gridcell`, `landunit`, `column`, `pft` dims) are not grid
+   fields and are skipped; vector pairs are not supported on masked files.
+
+Kernel: `apply_slices_masked` (OpenMP over slices, per-slice masks), masked
+reconstruction `recon_panel_masked` / `limit_panel_masked` sharing the
+`cell_phi` extrema machinery with the unmasked port.  The output writer
+defines every variable before writing any data (netCDF3 relocates written
+data on late defines; fatal with CLM's ~550 fields).

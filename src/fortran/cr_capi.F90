@@ -8,7 +8,7 @@ module cr_capi
   use cr_gnomonic
   use cr_moments
   use cr_grid,  only: panel_grid_t, grid_init
-  use cr_apply, only: apply_slices, slice_recon
+  use cr_apply, only: apply_slices, slice_recon, apply_slices_masked
   implicit none
 
 contains
@@ -171,5 +171,37 @@ contains
                       metrics, metrics_int, vtxw, xe, npair, pr_src,     &
                       pr_dst, smat, area_b, limiter_mode, f_in, f_out)
   end subroutine c_apply_slices
+
+  subroutine c_apply_slices_masked(n, ncol, nslice, nb, col2pij,         &
+                            nhi, hi_dst, hi_src, hi_w,                   &
+                            nli, li_dst, li_src,                         &
+                            stretch, centroid, metrics, metrics_int,     &
+                            vtxw, xe, npair, pr_src, pr_dst, smat,       &
+                            area_b, limiter_mode, frac_tol, fillval,     &
+                            lf, mask, f_in, f_out, frac_out)             &
+                            bind(C, name="cr_apply_slices_masked")
+    integer(c_int), intent(in), value :: n, ncol, nslice, nb, nhi, nli, npair
+    integer(c_int), intent(in), value :: limiter_mode
+    real(c_double), intent(in), value :: frac_tol, fillval
+    integer(c_int), intent(in)  :: col2pij(3, ncol)
+    integer(c_int), intent(in)  :: hi_dst(3, nhi), hi_src(3, 3, nhi)
+    real(c_double), intent(in)  :: hi_w(3, nhi)
+    integer(c_int), intent(in)  :: li_dst(3, nli), li_src(3, nli)
+    real(c_double), intent(in)  :: stretch(7, n, n), centroid(5, n, n)
+    real(c_double), intent(in)  :: metrics(3, n, n), metrics_int(3, n, n)
+    real(c_double), intent(in)  :: vtxw(4, 5, n, n), xe(0:n)
+    integer(c_int), intent(in)  :: pr_src(3, npair), pr_dst(npair)
+    real(c_double), intent(in)  :: smat(6, npair), area_b(nb)
+    real(c_double), intent(in)  :: lf(ncol)
+    integer(c_int), intent(in)  :: mask(ncol, nslice)
+    real(c_double), intent(in)  :: f_in(ncol, nslice)
+    real(c_double), intent(out) :: f_out(nb, nslice)
+    real(c_double), intent(out) :: frac_out(nb, nslice)
+    call apply_slices_masked(n, ncol, nslice, nb, col2pij, nhi, hi_dst,  &
+                      hi_src, hi_w, nli, li_dst, li_src, stretch,        &
+                      centroid, metrics, metrics_int, vtxw, xe, npair,   &
+                      pr_src, pr_dst, smat, area_b, limiter_mode,        &
+                      frac_tol, fillval, lf, mask, f_in, f_out, frac_out)
+  end subroutine c_apply_slices_masked
 
 end module cr_capi
